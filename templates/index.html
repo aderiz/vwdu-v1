@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xero Price Updater - VW Down Under</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <img src="/static/logo.png" alt="VW Down Under" class="logo">
+            <h1>Xero Parts Price Updater</h1>
+            <p>Automated price scraping from JustKampers & Heritage Parts Centre</p>
+        </header>
+
+        <div class="upload-section">
+            <h2>Upload Xero Export CSV</h2>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div class="file-input-wrapper">
+                    <input type="file" id="csvFile" name="file" accept=".csv" required>
+                    <label for="csvFile" class="file-label">Choose CSV File</label>
+                    <span id="fileName">No file selected</span>
+                </div>
+                <div style="margin: 15px 0;">
+                    <label>
+                        <input type="checkbox" id="testMode" name="test_mode" value="true">
+                        <span style="margin-left: 5px;">Test Mode (Fast processing with simulated prices)</span>
+                    </label>
+                </div>
+                <button type="submit" id="uploadBtn" class="btn btn-primary">Start Processing</button>
+                <button type="button" id="cancelBtn" class="btn btn-danger" style="display: none;">Cancel</button>
+            </form>
+        </div>
+
+        <div id="progressSection" style="display: none;">
+            <h2>Processing Progress</h2>
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+                <span id="progressText">0%</span>
+            </div>
+            <div class="status-info">
+                <p>Status: <span id="statusText">Idle</span></p>
+                <p>Current Item: <span id="currentItem">-</span></p>
+                <p>Elapsed Time: <span id="elapsedTime">00:00:00</span></p>
+                <div class="stats">
+                    <div class="stat">
+                        <span class="stat-label">Processed:</span>
+                        <span id="processedCount">0</span> / <span id="totalCount">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Updated:</span>
+                        <span id="updatedCount" class="success">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Unchanged:</span>
+                        <span id="unchangedCount" class="info">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Errors:</span>
+                        <span id="errorCount" class="error">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resultsSection" style="display: none;">
+            <h2>Results</h2>
+            <div class="results-tabs">
+                <button class="tab-btn active" data-tab="updates">Price Updates</button>
+                <button class="tab-btn" data-tab="errors">Errors</button>
+                <button class="tab-btn" data-tab="unchanged">Unchanged</button>
+            </div>
+            
+            <div id="updatesTab" class="tab-content active">
+                <h3>Price Updates</h3>
+                <div class="table-wrapper">
+                    <table id="updatesTable">
+                        <thead>
+                            <tr>
+                                <th>Item Code</th>
+                                <th>Item Name</th>
+                                <th>Old Price</th>
+                                <th>New Price</th>
+                                <th>Change</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div id="errorsTab" class="tab-content">
+                <h3>Errors</h3>
+                <div class="table-wrapper">
+                    <table id="errorsTable">
+                        <thead>
+                            <tr>
+                                <th>Item Code</th>
+                                <th>Item Name</th>
+                                <th>Current Price</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div id="unchangedTab" class="tab-content">
+                <h3>Unchanged Prices</h3>
+                <div class="table-wrapper">
+                    <table id="unchangedTable">
+                        <thead>
+                            <tr>
+                                <th>Item Code</th>
+                                <th>Item Name</th>
+                                <th>Price</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="downloadSection" style="display: none;">
+            <h2>Download Results</h2>
+            <div class="download-buttons">
+                <a id="downloadCsv" class="btn btn-success" download>Download Updated CSV</a>
+                <a id="downloadReport" class="btn btn-info" download>Download Report</a>
+            </div>
+        </div>
+
+        <div id="liveLog">
+            <h3>Live Activity Log</h3>
+            <div id="logContent"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
