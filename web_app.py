@@ -140,7 +140,8 @@ def process_csv_test(filepath):
                 'new_price': update['NewPrice'],
                 'difference': update['Difference'],
                 'difference_percent': update['DifferencePercent'],
-                'source': update['Source']
+                'source': update['Source'],
+                'url': update.get('URL')
             })
         
         for error in errors:
@@ -196,7 +197,13 @@ def process_csv(filepath):
                 
             item_code = item.get('ItemCode', item.get('*ItemCode', ''))
             item_name = item.get('ItemName', '')
-            current_price = float(item.get('SalesUnitPrice', 0))
+            
+            # Handle empty or invalid price values
+            try:
+                price_str = item.get('SalesUnitPrice', '0').strip()
+                current_price = float(price_str) if price_str else 0.0
+            except (ValueError, AttributeError):
+                current_price = 0.0
             
             current_task.current_item = f"{item_code}: {item_name}"
             current_task.processed_items = i
@@ -214,11 +221,12 @@ def process_csv(filepath):
             
             # Get new price with timeout protection
             try:
-                new_price, source = scraper_instance.get_price(item_name)
+                new_price, source, url = scraper_instance.get_price(item_name)
             except Exception as e:
                 logger.error(f"Error getting price for {item_name}: {e}")
                 new_price = None
                 source = "error"
+                url = None
             
             if new_price is not None:
                 price_diff = new_price - current_price
@@ -231,7 +239,8 @@ def process_csv(filepath):
                     'new_price': new_price,
                     'difference': price_diff,
                     'difference_percent': price_diff_pct,
-                    'source': source
+                    'source': source,  # Keep the source name
+                    'url': url  # Add URL as separate field
                 }
                 
                 if abs(price_diff) > 0.01:
