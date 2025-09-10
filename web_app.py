@@ -255,7 +255,9 @@ def process_csv(filepath):
                     'item_code': item_code,
                     'item_name': item_name,
                     'current_price': current_price,
-                    'error': 'Price not found'
+                    'error': 'Price not found',
+                    'source': source,
+                    'url': url
                 }
                 current_task.errors.append(error_result)
                 socketio.emit('item_error', error_result)
@@ -328,6 +330,10 @@ def write_report(filepath, task):
                 f.write(f"\n{error['item_code']}: {error['item_name']}\n")
                 f.write(f"  Current Price: £{error['current_price']:.2f}\n")
                 f.write(f"  Error: {error['error']}\n")
+                if error.get('source'):
+                    f.write(f"  Source: {error['source']}\n")
+                if error.get('url'):
+                    f.write(f"  URL: {error['url']}\n")
 
 @app.route('/status')
 def get_status():
