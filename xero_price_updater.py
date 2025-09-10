@@ -45,13 +45,17 @@ class PartsPriceScraper:
         self.options.add_argument('user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
         
         self.driver = None
+        self.last_website = None  # Track which website was last accessed
         
-    def start_driver(self):
+    def start_driver(self, force_restart=False, timeout=30):
         """Start the Chrome driver"""
+        if force_restart and self.driver:
+            self.close_driver()
+        
         if not self.driver:
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=self.options)
-            self.driver.set_page_load_timeout(30)
+            self.driver.set_page_load_timeout(timeout)
             self.driver.implicitly_wait(5)
     
     def close_driver(self):
@@ -81,13 +85,17 @@ class PartsPriceScraper:
         else:
             return 'heritage'
     
-    def search_justkampers(self, sku: str) -> Optional[float]:
+    def search_justkampers(self, sku: str, retry_count: int = 0) -> Tuple[Optional[float], Optional[str]]:
         """
         Search for a part on JustKampers.com
-        Returns the price if found, None otherwise
+        Returns (price, product_url) if found, (None, None) otherwise
         """
         try:
-            self.start_driver()
+            # Restart driver if we were on Heritage before (to avoid state issues)
+            force_restart = (self.last_website == 'heritage' or retry_count > 0)
+            # Use shorter timeout for JustKampers to fail fast
+            self.start_driver(force_restart=force_restart, timeout=15)
+            self.last_website = 'justkampers'
             
             # Clean SKU for search
             search_sku = sku.strip()
@@ -98,7 +106,6 @@ class PartsPriceScraper:
             logger.info(f"Searching JustKampers for SKU: {search_sku}")
             
             self.driver.get(search_url)
-            time.sleep(2)  # Wait for JavaScript to load
             
             # Handle cookie popup if present
             try:
@@ -107,19 +114,17 @@ class PartsPriceScraper:
                 )
                 cookie_button.click()
                 logger.info("Accepted cookies on JustKampers")
-                time.sleep(1)
             except:
                 pass  # Cookie popup might not appear or already accepted
             
-            # Wait for page to load and check for products
-            time.sleep(3)  # Allow page to load
+            # Check for products
             
             # Look for product items
             products = self.driver.find_elements(By.CSS_SELECTOR, "div.product-item")
             
             if not products:
                 logger.warning(f"No products found for {search_sku} on JustKampers")
-                return None
+                return None, None
             
             logger.info(f"Found {len(products)} products on JustKampers")
             
@@ -157,8 +162,14 @@ class PartsPriceScraper:
                                 price_amount = price_element.get_attribute('data-price-amount')
                                 if price_amount:
                                     price = float(price_amount)
+                                    # Get product URL
+                                    try:
+                                        product_link = product.find_element(By.CSS_SELECTOR, "a.product-item-photo, a.product-item-link")
+                                        product_url = product_link.get_attribute('href')
+                                    except:
+                                        product_url = self.driver.current_url
                                     logger.info(f"Found price £{price} for {search_sku} on JustKampers (from data attribute)")
-                                    return price
+                                    return price, product_url
                                 
                                 # Otherwise get from text
                                 price_text = price_element.text
@@ -166,8 +177,14 @@ class PartsPriceScraper:
                                     price_match = re.search(r'[\d,]+\.?\d*', price_text)
                                     if price_match:
                                         price = float(price_match.group().replace(',', ''))
+                                        # Get product URL
+                                        try:
+                                            product_link = product.find_element(By.CSS_SELECTOR, "a.product-item-photo, a.product-item-link")
+                                            product_url = product_link.get_attribute('href')
+                                        except:
+                                            product_url = self.driver.current_url
                                         logger.info(f"Found price £{price} for {search_sku} on JustKampers")
-                                        return price
+                                        return price, product_url
                             except NoSuchElementException:
                                 continue
                         
@@ -175,7 +192,9 @@ class PartsPriceScraper:
                         try:
                             product_link = product.find_element(By.CSS_SELECTOR, "a.product-item-photo, a.product-item-link")
                             product_link.click()
-                            time.sleep(2)
+                            
+                            # Get the product page URL
+                            product_url = self.driver.current_url
                             
                             # Try to get price from product page
                             for selector in price_selectors:
@@ -187,33 +206,49 @@ class PartsPriceScraper:
                                     if price_match:
                                         price = float(price_match.group().replace(',', ''))
                                         logger.info(f"Found price £{price} for {search_sku} on JustKampers (product page)")
-                                        return price
+                                        return price, product_url
                                 except NoSuchElementException:
                                     continue
                         except:
                             pass
                         
                         logger.warning(f"Product found but no price for {search_sku} on JustKampers")
-                        return None
+                        return None, None
                         
                 except Exception as e:
                     logger.debug(f"Error checking product: {e}")
                     continue
             
             logger.warning(f"No exact match found for {search_sku} on JustKampers")
-            return None
+            return None, None
             
+        except TimeoutException as e:
+            logger.warning(f"Timeout searching JustKampers for {sku}: {e}")
+            # Retry once with a fresh driver
+            if retry_count < 1:
+                logger.info(f"Retrying JustKampers search for {sku}...")
+                self.close_driver()  # Force close the driver
+                return self.search_justkampers(sku, retry_count + 1)
+            return None, None
         except Exception as e:
             logger.error(f"Error searching JustKampers for {sku}: {e}")
-            return None
+            # Retry once for other errors too
+            if retry_count < 1 and "timeout" in str(e).lower():
+                logger.info(f"Retrying JustKampers search for {sku} after error...")
+                self.close_driver()
+                return self.search_justkampers(sku, retry_count + 1)
+            return None, None
     
-    def search_heritage(self, sku: str) -> Optional[float]:
+    def search_heritage(self, sku: str) -> Tuple[Optional[float], Optional[str]]:
         """
         Search for a part on Heritage Parts Centre
-        Returns the price if found, None otherwise
+        Returns (price, product_url) if found, (None, None) otherwise
         """
         try:
-            self.start_driver()
+            # Don't restart driver if we're already on Heritage
+            force_restart = (self.last_website == 'justkampers')
+            self.start_driver(force_restart=force_restart)
+            self.last_website = 'heritage'
             
             # Clean SKU for search - Heritage sometimes has different formatting
             search_sku = sku.strip().rstrip('/')
@@ -225,7 +260,6 @@ class PartsPriceScraper:
             logger.info(f"Searching Heritage for SKU: {search_sku}")
             
             self.driver.get(search_url)
-            time.sleep(3)  # Wait for JavaScript to load
             
             # Handle cookie popup if present (Cookiebot)
             try:
@@ -235,14 +269,12 @@ class PartsPriceScraper:
                 )
                 cookie_button.click()
                 logger.info("Accepted cookies on Heritage (Cookiebot)")
-                time.sleep(1)
             except:
                 try:
                     # Alternative: try other cookie accept buttons
                     cookie_button = self.driver.find_element(By.XPATH, "//button[contains(text(), 'OK') or contains(text(), 'Accept')]")
                     cookie_button.click()
                     logger.info("Accepted cookies on Heritage")
-                    time.sleep(1)
                 except:
                     pass  # Cookie popup might not appear or already accepted
             
@@ -253,10 +285,8 @@ class PartsPriceScraper:
                 )
             except TimeoutException:
                 logger.warning(f"No search results found for {search_sku} on Heritage")
-                return None
+                return None, None
             
-            # Additional wait for content to fully load
-            time.sleep(2)
             
             # Find products in search results  
             products = self.driver.find_elements(By.CSS_SELECTOR, "div.product-item-info")
@@ -344,8 +374,14 @@ class PartsPriceScraper:
                                     if price_match:
                                         price = float(price_match.group().replace(',', ''))
                                         if price > 0:  # Make sure we have a valid price
+                                            # Get product URL
+                                            try:
+                                                product_link = product.find_element(By.CSS_SELECTOR, "a.product-item-link")
+                                                product_url = product_link.get_attribute('href')
+                                            except:
+                                                product_url = self.driver.current_url
                                             logger.info(f"Found price £{price} for {search_sku} on Heritage")
-                                            return price
+                                            return price, product_url
                             except Exception as e:
                                 logger.debug(f"Price extraction error with {selector}: {e}")
                                 continue
@@ -353,7 +389,9 @@ class PartsPriceScraper:
                         # If no price found in list, try clicking through to product page
                         product_link = product.find_element(By.CSS_SELECTOR, "a.product-item-link")
                         product_link.click()
-                        time.sleep(2)
+                        
+                        # Get the product page URL
+                        product_url = self.driver.current_url
                         
                         # Try to get price from product page
                         for selector in price_selectors:
@@ -365,7 +403,7 @@ class PartsPriceScraper:
                                 if price_match:
                                     price = float(price_match.group().replace(',', ''))
                                     logger.info(f"Found price £{price} for {search_sku} on Heritage (product page)")
-                                    return price
+                                    return price, product_url
                             except NoSuchElementException:
                                 continue
                         
@@ -374,31 +412,31 @@ class PartsPriceScraper:
                     continue
             
             logger.warning(f"No exact match found for {search_sku} on Heritage")
-            return None
+            return None, None
             
         except Exception as e:
             logger.error(f"Error searching Heritage for {sku}: {e}")
-            return None
+            return None, None
     
-    def get_price(self, item_name: str) -> Tuple[Optional[float], str]:
+    def get_price(self, item_name: str) -> Tuple[Optional[float], str, Optional[str]]:
         """
         Get price for an item based on its name and SKU
-        Returns: (price, source_website)
+        Returns: (price, source_website, product_url)
         """
         description, sku = self.extract_sku_from_name(item_name)
         
         if not sku:
             logger.warning(f"No SKU found in item name: {item_name}")
-            return None, "unknown"
+            return None, "unknown", None
         
         website = self.determine_website(sku)
         
         if website == 'justkampers':
-            price = self.search_justkampers(sku)
-            return price, 'JustKampers'
+            price, url = self.search_justkampers(sku)
+            return price, 'JustKampers', url
         else:
-            price = self.search_heritage(sku)
-            return price, 'Heritage Parts Centre'
+            price, url = self.search_heritage(sku)
+            return price, 'Heritage Parts Centre', url
 
 
 def process_xero_export(input_file: str, output_file: str, update_file: str):
@@ -435,7 +473,7 @@ def process_xero_export(input_file: str, output_file: str, update_file: str):
             logger.info(f"[{i}/{total_items}] Processing: {item_name}")
             
             # Get new price
-            new_price, source = scraper.get_price(item_name)
+            new_price, source, url = scraper.get_price(item_name)
             
             if new_price is not None:
                 price_diff = new_price - current_price
@@ -449,7 +487,8 @@ def process_xero_export(input_file: str, output_file: str, update_file: str):
                         'NewPrice': new_price,
                         'Difference': price_diff,
                         'DifferencePercent': price_diff_pct,
-                        'Source': source
+                        'Source': source,
+                        'URL': url
                     })
                     # Update the item's price
                     item['SalesUnitPrice'] = str(new_price)
@@ -458,7 +497,8 @@ def process_xero_export(input_file: str, output_file: str, update_file: str):
                         'ItemCode': item_code,
                         'ItemName': item_name,
                         'Price': current_price,
-                        'Source': source
+                        'Source': source,
+                        'URL': url
                     })
             else:
                 errors.append({
@@ -468,8 +508,6 @@ def process_xero_export(input_file: str, output_file: str, update_file: str):
                     'Error': 'Price not found'
                 })
             
-            # Add a small delay to avoid overwhelming the servers
-            time.sleep(1)
         
         # Write the updated CSV for Xero import
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
